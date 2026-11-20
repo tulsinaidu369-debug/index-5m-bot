@@ -5,14 +5,14 @@ import requests
 import yfinance as yf
 
 SYMS = {"GOLD": "GC=F", "BTC": "BTC-USD"}
-TF = 15          # timeframe (minute)
+TF = 30          # timeframe (minute)
 N = 3            # pivot left/right candles
 ATR_P = 14
 MULT = 0.25      # SL buffer = 0.25 x ATR
 RR = 2.0         # target 1:2
 EQ_TOL = 0.10    # equal high/low tolerance (x ATR)
 MIN_GAP = 10     # equal levels ke beech min candles
-LOOKBACK = 400   # equal level dhundhne ki max candles (~4 din, 24h market)
+LOOKBACK = 200   # equal level dhundhne ki max candles (~4 din, 24h market)
 STATE_FILE = "state.json"
 
 
