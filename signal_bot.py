@@ -4,15 +4,15 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-SYMS = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "SENSEX": "^BSESN"}
-TF = 5           # timeframe (minute)
+SYMS = {"GOLD": "GC=F", "BTC": "BTC-USD"}
+TF = 15          # timeframe (minute)
 N = 3            # pivot left/right candles
 ATR_P = 14
 MULT = 0.25      # SL buffer = 0.25 x ATR
 RR = 2.0         # target 1:2
 EQ_TOL = 0.10    # equal high/low tolerance (x ATR)
 MIN_GAP = 10     # equal levels ke beech min candles
-LOOKBACK = 300   # equal level dhundhne ki max candles (~4 din)
+LOOKBACK = 400   # equal level dhundhne ki max candles (~4 din, 24h market)
 STATE_FILE = "state.json"
 
 
@@ -40,8 +40,8 @@ def load(tk):
     df = df[["Open", "High", "Low", "Close"]].dropna()
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
-    df.index = df.index.tz_convert("Asia/Kolkata")
-    now = pd.Timestamp.now(tz="Asia/Kolkata")
+    df.index = df.index.tz_convert("UTC")      # din = UTC din (00:00 se 23:59)
+    now = pd.Timestamp.now(tz="UTC")
     return df[df.index + pd.Timedelta(minutes=TF) <= now]  # sirf closed candles
 
 
@@ -57,7 +57,7 @@ def run(df, name):
     o, h, l, c = (df[k].values for k in ["Open", "High", "Low", "Close"])
     a = atr(df).values
     day = np.array([ts.date().isoformat() for ts in df.index])
-    mins = np.array([ts.hour * 60 + ts.minute for ts in df.index])  # candle start
+    mins = np.array([ts.hour * 60 + ts.minute for ts in df.index])  # candle start (UTC)
     g = df.groupby(day)
     dH, dL = g["High"].max(), g["Low"].min()
     days = list(dH.index)
@@ -88,11 +88,13 @@ def run(df, name):
             else:
                 if h[t] >= sl: px, kind = max(o[t], sl), "SL"
                 elif l[t] <= tp: px, kind = min(o[t], tp), "TARGET"
-            if kind is None and mins[t] >= 915 - TF:   # 3:15 PM exit
+            if kind is None and day[t] != pos["day"]:   # din badal gaya (gap/weekend)
+                px, kind = o[t], "TIME"
+            elif kind is None and mins[t] >= 1440 - TF:  # din ki aakhri candle
                 px, kind = c[t], "TIME"
             if kind:
                 pnl = (px - pos["entry"]) if s == "BUY" else (pos["entry"] - px)
-                label = {"SL": "🛑 SL HIT", "TARGET": "🎯 TARGET HIT", "TIME": "⏰ 3:15 EXIT"}[kind]
+                label = {"SL": "🛑 SL HIT", "TARGET": "🎯 TARGET HIT", "TIME": "⏰ DAY-END EXIT"}[kind]
                 add(t, kind, f"{label} {s} {name} [{TF}m]\nPrice ~ {px:.2f}\nEntry tha {pos['entry']:.2f}\nP/L: {pnl:+.1f} pts")
                 pos = None
 
@@ -127,7 +129,7 @@ def run(df, name):
             if x["side"] == "LOW" and c[t] < x["p"]: x["dead"] = True
             if x["side"] == "HIGH" and c[t] > x["p"]: x["dead"] = True
 
-        if pos or np.isnan(a[t]) or not (570 <= mins[t] <= 870 - TF):   # 9:30 se 2:30 PM close
+        if pos or np.isnan(a[t]) or not (TF <= mins[t] <= 1440 - 2 * TF):   # din ki pehli aur aakhri candle chhod ke
             continue
         if bool(buys) == bool(sells):      # koi nahi ya dono: no trade
             continue
@@ -136,7 +138,7 @@ def run(df, name):
             sl = l[t] - MULT * a[t]; risk = c[t] - sl
             if risk <= 0: continue
             tp = c[t] + RR * risk
-            pos = {"side": "BUY", "entry": c[t], "sl": sl, "tp": tp}
+            pos = {"side": "BUY", "entry": c[t], "sl": sl, "tp": tp, "day": day[t]}
             nm = {"PDL": "Prev Day Low", "EQ": "Equal Low"}[x["kind"]]
             add(t, "ENTRY", f"🟢 BUY {name} [{TF}m]\nSweep: {nm} {x['p']:.2f} (wick low {l[t]:.2f})\nEntry: {c[t]:.2f} ({TF}m close)\nSL: {sl:.2f}\nTarget: {tp:.2f} (1:{RR:g})\nRisk: {risk:.1f} pts")
         else:
@@ -144,7 +146,7 @@ def run(df, name):
             sl = h[t] + MULT * a[t]; risk = sl - c[t]
             if risk <= 0: continue
             tp = c[t] - RR * risk
-            pos = {"side": "SELL", "entry": c[t], "sl": sl, "tp": tp}
+            pos = {"side": "SELL", "entry": c[t], "sl": sl, "tp": tp, "day": day[t]}
             nm = {"PDH": "Prev Day High", "EQ": "Equal High"}[x["kind"]]
             add(t, "ENTRY", f"🔴 SELL {name} [{TF}m]\nSweep: {nm} {x['p']:.2f} (wick high {h[t]:.2f})\nEntry: {c[t]:.2f} ({TF}m close)\nSL: {sl:.2f}\nTarget: {tp:.2f} (1:{RR:g})\nRisk: {risk:.1f} pts")
     return ev
@@ -164,7 +166,8 @@ def main():
             for e in events:
                 fresh = e["ts"] > seen if seen else e["ts"] == last_bar
                 if fresh:
-                    notify(f"{e['msg']}\n🕒 {e['ts'][:16].replace('T', ' ')}")
+                    ist = pd.Timestamp(e["ts"]).tz_convert("Asia/Kolkata").strftime("%d-%b %H:%M IST")
+                    notify(f"{e['msg']}\n🕒 {ist}")
             state[name] = last_bar
             print(f"{name}: {len(df)} candles, last {last_bar[:16]}, events {len(events)}")
         except Exception as ex:
